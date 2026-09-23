@@ -1,0 +1,6 @@
+{
+  "name": "SVNIT Radio",
+  "description": "Collaborative, web-based campus radio station for SVNIT with synced playlist, YouTube request system, and community strike moderation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
