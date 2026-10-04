@@ -49,12 +49,6 @@ export const RequestSection: React.FC<RequestSectionProps> = ({
       artist: 'Saregama Music',
     },
     {
-      title: 'Yeh Raaten Yeh Mausam (SANAM)',
-      url: 'https://youtu.be/4HRC6c5-2lQ?si=TczctOAio01RCoy3',
-      duration: 209, // 3:29
-      artist: 'SANAM',
-    },
-    {
       title: 'Marudaani Cover - Sanah Moidutty',
       url: 'https://youtu.be/t-a6VlOUEtc?si=vAMGMNxoB7y3QBHi',
       duration: 178, // 2:58
