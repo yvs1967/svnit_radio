@@ -198,6 +198,11 @@ class YouTubeAudioService {
   }
 
   public playVideo(videoId: string, startSeconds: number = 0) {
+    if (!videoId) {
+      this.pause();
+      this.currentVideoId = null;
+      return;
+    }
     this.currentVideoId = videoId;
     this.pendingStartSeconds = startSeconds;
     this.shouldBePlaying = true;

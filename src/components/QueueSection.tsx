@@ -7,14 +7,23 @@ interface QueueSectionProps {
   queue: Song[];
   currentRemainingTime: number;
   onStrikeSong: (songId: string) => void;
+  listenersCount?: number;
+  strikeThreshold?: number;
+  isSmallRoom?: boolean;
 }
 
 export const QueueSection: React.FC<QueueSectionProps> = ({
   queue,
   currentRemainingTime,
   onStrikeSong,
+  listenersCount = 1,
+  strikeThreshold,
+  isSmallRoom,
 }) => {
   const [removedAlert, setRemovedAlert] = useState<string | null>(null);
+
+  const activeSmallRoom = isSmallRoom ?? (listenersCount <= 3);
+  const effectiveThreshold = strikeThreshold || (listenersCount <= 1 ? 1 : listenersCount <= 3 ? 2 : 3);
 
   // Calculate cumulative wait times for each queued song
   let cumulativeTime = currentRemainingTime;
@@ -46,10 +55,22 @@ export const QueueSection: React.FC<QueueSectionProps> = ({
       {/* Mandatory Station Moderation Rule Text */}
       <div className="p-3.5 rounded-xl bg-neutral-950/80 border border-neutral-800 mb-5 text-sm text-neutral-300 flex items-start gap-3">
         <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-        <p className="leading-relaxed">
-          <strong className="text-white font-semibold">Moderation Policy: </strong>
-          Think a request doesn't belong? Strike it. Three different people striking a song pulls it from the queue.
-        </p>
+        <div className="leading-relaxed">
+          <p>
+            <strong className="text-white font-semibold">Moderation Policy: </strong>
+            Think a request doesn't belong? Strike it.
+          </p>
+          {activeSmallRoom ? (
+            <p className="text-amber-400 text-xs mt-1 font-mono font-medium flex items-center gap-1.5">
+              <span>⚡</span>
+              <span>Low-traffic room ({listenersCount} active {listenersCount === 1 ? 'listener' : 'listeners'}): Strike restriction is waived! {effectiveThreshold === 1 ? '1 strike immediately pulls the track.' : `${effectiveThreshold} strikes pull the track, and you can strike multiple times.`}</span>
+            </p>
+          ) : (
+            <p className="text-neutral-400 text-xs mt-1">
+              Three different people striking a song pulls it from the queue.
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Real-time alert notice */}
@@ -82,8 +103,8 @@ export const QueueSection: React.FC<QueueSectionProps> = ({
           {queue.map((song, index) => {
             const startsIn = cumulativeTime;
             cumulativeTime += song.duration;
-            const isStruckOut = song.strikes >= 3;
-            const isCritical = song.strikes === 2;
+            const isStruckOut = song.strikes >= effectiveThreshold;
+            const isCritical = song.strikes === effectiveThreshold - 1 && effectiveThreshold > 1;
 
             return (
               <div
@@ -150,10 +171,10 @@ export const QueueSection: React.FC<QueueSectionProps> = ({
                   {/* Strikes Counter Meter */}
                   <div
                     className="flex items-center gap-2 bg-neutral-900/90 border border-neutral-800 px-2.5 py-1.5 rounded-lg"
-                    title={`${song.strikes} of 3 community strikes required to remove track`}
+                    title={`${song.strikes} of ${effectiveThreshold} strike(s) required to remove track`}
                   >
                     <div className="flex items-center gap-1">
-                      {[1, 2, 3].map((pip) => (
+                      {Array.from({ length: effectiveThreshold }, (_, i) => i + 1).map((pip) => (
                         <span
                           key={pip}
                           className={`w-2.5 h-2.5 rounded-full transition-all duration-300 ${
@@ -166,14 +187,14 @@ export const QueueSection: React.FC<QueueSectionProps> = ({
                     </div>
                     <span
                       className={`text-xs font-mono font-bold tabular-nums ${
-                        song.strikes === 2
+                        isCritical
                           ? 'text-rose-400 animate-pulse'
-                          : song.strikes === 1
+                          : song.strikes > 0
                           ? 'text-amber-400'
                           : 'text-neutral-400'
                       }`}
                     >
-                      {song.strikes}/3 strikes
+                      {song.strikes}/{effectiveThreshold} strike{effectiveThreshold === 1 ? '' : 's'}
                     </span>
                   </div>
 
@@ -182,26 +203,28 @@ export const QueueSection: React.FC<QueueSectionProps> = ({
                     {/* Primary Strike Button */}
                     <button
                       onClick={() => {
-                        if (!song.struckByMe) {
+                        if (activeSmallRoom || !song.struckByMe) {
                           onStrikeSong(song.id);
-                          if (song.strikes + 1 >= 3) {
-                            setRemovedAlert(`"${song.title}" received 3 strikes and is being removed by the server.`);
+                          if (song.strikes + 1 >= effectiveThreshold) {
+                            setRemovedAlert(`"${song.title}" reached strike threshold (${effectiveThreshold}) and was pulled from the air.`);
                           }
                         }
                       }}
-                      disabled={song.struckByMe}
+                      disabled={!activeSmallRoom && song.struckByMe}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold text-xs transition-all ${
-                        song.struckByMe
+                        !activeSmallRoom && song.struckByMe
                           ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 cursor-default'
                           : 'bg-neutral-800 text-neutral-200 hover:text-white hover:bg-rose-950/60 hover:border-rose-600/60 border border-neutral-700 active:scale-95 shadow-sm'
                       }`}
                       title={
-                        song.struckByMe
+                        activeSmallRoom
+                          ? `Strike this song (${Math.max(0, effectiveThreshold - song.strikes)} more needed to pull)`
+                          : song.struckByMe
                           ? 'You have already recorded your 1 vote for this track'
                           : 'Strike this song (3 strikes remove it from the global station queue)'
                       }
                     >
-                      {song.struckByMe ? (
+                      {!activeSmallRoom && song.struckByMe ? (
                         <>
                           <CheckCircle2 className="w-3.5 h-3.5 text-rose-400" />
                           <span>Struck (1/1)</span>
@@ -209,7 +232,13 @@ export const QueueSection: React.FC<QueueSectionProps> = ({
                       ) : (
                         <>
                           <Flame className="w-3.5 h-3.5 text-rose-400" />
-                          <span>Strike Track</span>
+                          <span>
+                            {effectiveThreshold === 1
+                              ? 'Pull Track'
+                              : activeSmallRoom && song.struckByMe
+                              ? '+ Strike Again'
+                              : 'Strike Track'}
+                          </span>
                         </>
                       )}
                     </button>

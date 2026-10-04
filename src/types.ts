@@ -18,7 +18,7 @@ export interface RadioState {
   isPlaying: boolean;
   isSynced: boolean;
   listenersCount: number;
-  currentSong: Song;
+  currentSong: Song | null;
   currentTime: number; // in seconds
   volume: number;
   isMuted: boolean;

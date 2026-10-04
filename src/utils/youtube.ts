@@ -44,9 +44,26 @@ export function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+const KNOWN_TRACK_INFO: Record<string, { title: string; author_name: string }> = {
+  'IAIGnS9BPKs': {
+    title: 'Ek Ladki Ko Dekha Toh Aisa Laga - Title Song',
+    author_name: 'Saregama Music',
+  },
+  '4HRC6c5-2lQ': {
+    title: 'Yeh Raaten Yeh Mausam - SANAM ft. Simran Sehgal',
+    author_name: 'SANAM',
+  },
+  't-a6VlOUEtc': {
+    title: 'Sakkarakatti - Marudaani Cover by Sanah Moidutty',
+    author_name: 'Sony Music South',
+  },
+};
+
 export async function fetchYouTubeOEmbed(url: string): Promise<OEmbedResult | null> {
   const videoId = extractYouTubeId(url);
   if (!videoId) return null;
+
+  const known = KNOWN_TRACK_INFO[videoId];
 
   const oembedEndpoint = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
 
@@ -65,8 +82,8 @@ export async function fetchYouTubeOEmbed(url: string): Promise<OEmbedResult | nu
     if (res.ok) {
       const data = await res.json();
       return {
-        title: data.title || `YouTube Audio (#${videoId.slice(0, 6)})`,
-        author_name: data.author_name || 'YouTube Artist',
+        title: data.title || known?.title || `YouTube Audio (#${videoId.slice(0, 6)})`,
+        author_name: data.author_name || known?.author_name || 'YouTube Artist',
         thumbnail_url: data.thumbnail_url || `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
       };
     }
@@ -74,10 +91,10 @@ export async function fetchYouTubeOEmbed(url: string): Promise<OEmbedResult | nu
     // CORS or network failure fallback
   }
 
-  // Graceful client fallback using extracted ID
+  // Graceful client fallback using extracted ID or known metadata
   return {
-    title: `YouTube Video #${videoId}`,
-    author_name: 'Verified Channel',
+    title: known?.title || `YouTube Video #${videoId}`,
+    author_name: known?.author_name || 'Verified Channel',
     thumbnail_url: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
   };
 }

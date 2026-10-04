@@ -7,12 +7,16 @@ interface RequestSectionProps {
   onAddSong?: (song: Omit<Song, 'id' | 'requestedAt' | 'strikes' | 'struckByMe' | 'status'>) => void;
   onSubmitRequest?: (url: string) => Promise<{ success: boolean; error?: string; remainingSeconds?: number; song?: any }>;
   cooldownSeconds: number;
+  listenersCount?: number;
+  isSmallRoom?: boolean;
 }
 
 export const RequestSection: React.FC<RequestSectionProps> = ({
   onAddSong,
   onSubmitRequest,
   cooldownSeconds,
+  listenersCount = 1,
+  isSmallRoom,
 }) => {
   const [urlInput, setUrlInput] = useState('');
   const [requesterName, setRequesterName] = useState('');
@@ -22,11 +26,23 @@ export const RequestSection: React.FC<RequestSectionProps> = ({
   const [titleRejectedWord, setTitleRejectedWord] = useState<string | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
 
-  // Sample songs for immediate testing (including one with forbidden title to test filter)
+  const activeSmallRoom = isSmallRoom ?? (listenersCount <= 3);
+  const isCooldownActive = !activeSmallRoom && cooldownSeconds > 0;
+
+  // User requested suggestion links
   const sampleLinks = [
-    { title: 'Chilled Cow Lo-Fi Session', url: 'https://www.youtube.com/watch?v=jfKfPfyJRdk' },
-    { title: 'Acoustic Guitar Melodies', url: 'https://www.youtube.com/watch?v=5qap5aO4i9A' },
-    { title: 'Synthwave Night Drive', url: 'https://www.youtube.com/watch?v=4xDzrJKXOOY' },
+    {
+      title: 'Ek Ladki Ko Dekha Toh Aisa Laga',
+      url: 'https://youtu.be/IAIGnS9BPKs?si=TRYY85nkesKKqXyH',
+    },
+    {
+      title: 'Yeh Raaten Yeh Mausam (SANAM)',
+      url: 'https://youtu.be/4HRC6c5-2lQ?si=TczctOAio01RCoy3',
+    },
+    {
+      title: 'Marudaani Cover - Sanah Moidutty',
+      url: 'https://youtu.be/t-a6VlOUEtc?si=vAMGMNxoB7y3QBHi',
+    },
   ];
 
   // Validate on URL change with debounce
@@ -78,8 +94,8 @@ export const RequestSection: React.FC<RequestSectionProps> = ({
       return;
     }
 
-    if (cooldownSeconds > 0) {
-      setErrorMsg(`Cooldown active. Each listener can request 1 song per hour. Please wait ${Math.ceil(cooldownSeconds / 60)} minutes.`);
+    if (isCooldownActive) {
+      setErrorMsg(`Cooldown active. Each listener can request 1 song per hour when >3 listeners are online. Please wait ${Math.ceil(cooldownSeconds / 60)} minutes.`);
       return;
     }
 
@@ -152,7 +168,7 @@ export const RequestSection: React.FC<RequestSectionProps> = ({
   };
 
   return (
-    <section className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-5 sm:p-6 shadow-xl backdrop-blur-sm relative">
+    <section id="request-section" className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-5 sm:p-6 shadow-xl backdrop-blur-sm relative">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <h2 className="text-xl sm:text-2xl font-bold text-white font-display flex items-center gap-2">
@@ -167,7 +183,12 @@ export const RequestSection: React.FC<RequestSectionProps> = ({
         {/* Hourly Cooldown status badge */}
         <div className="flex items-center gap-2 text-xs font-mono">
           <Clock className="w-3.5 h-3.5 text-amber-400" />
-          {cooldownSeconds > 0 ? (
+          {activeSmallRoom ? (
+            <span className="text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded flex items-center gap-1.5 font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              1–3 Listeners Online · 1-Hour Wait Waived
+            </span>
+          ) : isCooldownActive ? (
             <span className="text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 rounded">
               Hourly Limit: {formatCooldown(cooldownSeconds)} left
             </span>
@@ -179,13 +200,25 @@ export const RequestSection: React.FC<RequestSectionProps> = ({
         </div>
       </div>
 
-      {/* Mandatory Helper Text from Prompt */}
+      {/* Mandatory Helper Text from Prompt & Dynamic Low Traffic Mode */}
       <div className="p-3.5 rounded-xl bg-neutral-950/80 border border-neutral-800 mb-5 text-sm text-neutral-300 flex items-start gap-3">
         <HelpCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-        <p className="leading-relaxed">
-          <strong className="text-white font-semibold">Station Rule: </strong>
-          Everyone gets one request every hour. Paste a YouTube link to a song. Requests can be up to 15 minutes long, and anything still going after 7 minutes gets skipped.
-        </p>
+        <div className="leading-relaxed">
+          <p>
+            <strong className="text-white font-semibold">Station Rule: </strong>
+            Paste a YouTube link to a song (up to 15m, 7m max airplay).
+          </p>
+          {activeSmallRoom ? (
+            <p className="text-emerald-400 text-xs mt-1 font-mono font-medium flex items-center gap-1.5">
+              <span>⚡</span>
+              <span>Low-traffic mode ({listenersCount} active {listenersCount === 1 ? 'listener' : 'listeners'}): 1-hour cooldown is waived! You can queue songs back-to-back without waiting.</span>
+            </p>
+          ) : (
+            <p className="text-neutral-400 text-xs mt-1">
+              With 4+ active listeners, everyone gets one request per hour to keep sharing fair.
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Request Form */}
@@ -287,9 +320,9 @@ export const RequestSection: React.FC<RequestSectionProps> = ({
 
             <button
               type="submit"
-              disabled={cooldownSeconds > 0}
+              disabled={isCooldownActive}
               className={`shrink-0 flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs transition-all ${
-                cooldownSeconds > 0
+                isCooldownActive
                   ? 'bg-neutral-800 text-neutral-500 cursor-not-allowed'
                   : 'bg-amber-500 hover:bg-amber-400 text-neutral-950 shadow-md shadow-amber-500/20'
               }`}
@@ -302,36 +335,29 @@ export const RequestSection: React.FC<RequestSectionProps> = ({
 
         {/* Actions bar: Submit button, Cooldown bypass toggle for testing, and Quick Samples */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-          {/* Quick preset buttons */}
+          {/* Suggested songs requested by user */}
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-neutral-500 text-[11px] font-mono">Quick test links:</span>
+            <span className="text-neutral-500 text-[11px] font-mono">Suggested songs:</span>
             {sampleLinks.map((sample, i) => (
               <button
                 key={i}
                 type="button"
                 onClick={() => setUrlInput(sample.url)}
-                className="text-neutral-400 hover:text-amber-400 bg-neutral-950 border border-neutral-800 hover:border-neutral-700 px-2.5 py-1 rounded text-xs transition-colors"
+                className="text-neutral-300 hover:text-amber-400 bg-neutral-950 border border-neutral-800 hover:border-amber-500/50 px-2.5 py-1 rounded text-xs transition-colors flex items-center gap-1.5"
               >
-                {sample.title}
+                <Youtube className="w-3 h-3 text-red-500" />
+                <span>{sample.title}</span>
               </button>
             ))}
-            <button
-              type="button"
-              onClick={() => setUrlInput('https://www.youtube.com/watch?v=kNNZ8s0QG84&t=test_trailer')}
-              className="text-rose-400/80 hover:text-rose-300 bg-neutral-950 border border-rose-900/40 hover:border-rose-700 px-2.5 py-1 rounded text-xs transition-colors"
-              title="Test filter rejection with a trailer keyword"
-            >
-              Test Filter: &ldquo;Official Movie Trailer&rdquo;
-            </button>
           </div>
 
           <div className="flex items-center gap-3">
             {!previewData && (
               <button
                 type="submit"
-                disabled={!urlInput.trim() || cooldownSeconds > 0}
+                disabled={!urlInput.trim() || isCooldownActive}
                 className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-xs transition-all ${
-                  !urlInput.trim() || cooldownSeconds > 0
+                  !urlInput.trim() || isCooldownActive
                     ? 'bg-neutral-800 text-neutral-500 cursor-not-allowed'
                     : 'bg-amber-500 hover:bg-amber-400 text-neutral-950 shadow-md shadow-amber-500/20'
                 }`}

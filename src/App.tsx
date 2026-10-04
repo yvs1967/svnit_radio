@@ -17,34 +17,21 @@ import { Users, Radio, Sparkles, Clock, AlertTriangle, ShieldCheck } from 'lucid
 import studioDeskImage from './assets/images/radio_broadcast_desk_1790160475499.jpg';
 import currentArtImage from './assets/images/current_track_art_1790160494237.jpg';
 
-// Curated campus track fallback
-const INITIAL_CURRENT_SONG: Song = {
-  id: 'current-01',
-  title: 'Coke Studio | Pasoori | Ali Sethi x Shae Gill',
-  artist: 'Coke Studio Pakistan',
-  youtubeUrl: 'https://www.youtube.com/watch?v=5Eqb_-j3FDA',
-  youtubeId: '5Eqb_-j3FDA',
-  thumbnail: 'https://img.youtube.com/vi/5Eqb_-j3FDA/hqdefault.jpg',
-  duration: 228,
-  requestedBy: '@svnit_radio_desk',
-  requestedAt: new Date(),
-  strikes: 0,
-  struckByMe: false,
-  status: 'playing',
-};
-
 export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isSynced, setIsSynced] = useState(true);
   const [listenersCount, setListenersCount] = useState(1);
+  const [strikeThreshold, setStrikeThreshold] = useState(1);
   const [currentTime, setCurrentTime] = useState(0);
-  const [currentSong, setCurrentSong] = useState<Song>(INITIAL_CURRENT_SONG);
+  const [currentSong, setCurrentSong] = useState<Song | null>(null);
   const [queue, setQueue] = useState<Song[]>([]);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [volume, setVolume] = useState(0.8);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoVisible, setIsVideoVisible] = useState(false);
   const [liveNotice, setLiveNotice] = useState<{ title: string; message: string; type: 'info' | 'warn' | 'success' } | null>(null);
+
+  const isSmallRoom = listenersCount <= 3;
 
   const isPlayingRef = useRef(isPlaying);
   isPlayingRef.current = isPlaying;
@@ -77,6 +64,8 @@ export default function App() {
           ...payload.currentSong,
           struckByMe: payload.currentSong.struckByUsers?.includes(myUserId) || false,
         });
+      } else {
+        setCurrentSong(null);
       }
 
       if (payload.queue) {
@@ -88,37 +77,60 @@ export default function App() {
         );
       }
 
-      setListenersCount(payload.listenerCount || 1);
+      const count = payload.listenerCount || 1;
+      setListenersCount(count);
+      if (payload.strikeThreshold) {
+        setStrikeThreshold(payload.strikeThreshold);
+      } else {
+        setStrikeThreshold(count <= 1 ? 1 : count <= 3 ? 2 : 3);
+      }
       setCurrentTime(payload.seekSeconds || 0);
 
       // If user has already clicked Play, seek hidden YouTube player to the exact server second
-      if (isPlayingRef.current && payload.currentSong) {
+      if (isPlayingRef.current && payload.currentSong?.youtubeId) {
         ytAudioService.playVideo(payload.currentSong.youtubeId, payload.seekSeconds || 0);
       }
     });
 
     // Real-time listener count broadcast
-    socket.on('listeners:count', (count: number) => {
+    socket.on('listeners:count', (data: any) => {
+      const count = typeof data === 'number' ? data : (data?.count || 1);
       setListenersCount(count);
+      const threshold = typeof data === 'object' && data?.strikeThreshold
+        ? data.strikeThreshold
+        : (count <= 1 ? 1 : count <= 3 ? 2 : 3);
+      setStrikeThreshold(threshold);
+    });
+
+    socket.on('room:config', (data: { count: number; strikeThreshold: number; isSmallRoom: boolean }) => {
+      setListenersCount(data.count);
+      setStrikeThreshold(data.strikeThreshold);
     });
 
     // Authoritative Track Change from server (e.g. 7-minute skip or track finish)
     socket.on('track:changed', (payload: TrackChangedPayload) => {
       console.log('📻 Authoritative Track Change:', payload);
-      setCurrentSong({
-        ...payload.currentSong,
-        struckByMe: false,
-      });
-      setCurrentTime(0);
+      if (payload.currentSong) {
+        setCurrentSong({
+          ...payload.currentSong,
+          struckByMe: false,
+        });
+        setCurrentTime(0);
 
-      if (isPlayingRef.current && payload.currentSong) {
-        ytAudioService.playVideo(payload.currentSong.youtubeId, 0);
-      }
+        if (isPlayingRef.current && payload.currentSong.youtubeId) {
+          ytAudioService.playVideo(payload.currentSong.youtubeId, 0);
+        }
 
-      if (payload.reason === 'skipped_7min') {
-        showNotice('7-Minute Rule Triggered', 'Track played for 7 minutes and was automatically rotated to keep the station fresh.', 'warn');
+        if (payload.reason === 'skipped_7min') {
+          showNotice('7-Minute Rule Triggered', 'Track played for 7 minutes and was automatically rotated to keep the station fresh.', 'warn');
+        } else {
+          showNotice('Now Playing', `"${payload.currentSong.title}" is now broadcasting live on SVNIT Radio.`, 'info');
+        }
       } else {
-        showNotice('Now Playing', `"${payload.currentSong.title}" is now broadcasting live on SVNIT Radio.`, 'info');
+        setCurrentSong(null);
+        setCurrentTime(0);
+        ytAudioService.pause();
+        showNotice('Station Standby', 'The queue is empty. Station is on standby waiting for the next request.', 'info');
       }
     });
 
@@ -137,14 +149,15 @@ export default function App() {
       showNotice('New Song Queued', `${data.requestedBy} added "${data.title}" to Up Next`, 'success');
     });
 
-    // Notification when a song reaches 3 strikes and is removed
-    socket.on('notification:song_pulled', (data: { songTitle: string; reason: string }) => {
-      showNotice('Song Pulled from Air', `"${data.songTitle}" reached 3 community strikes and was removed from the queue.`, 'warn');
+    // Notification when a song reaches strike threshold and is removed
+    socket.on('notification:song_pulled', (data: { songTitle: string; reason?: string }) => {
+      showNotice('Song Pulled from Air', data.reason || `"${data.songTitle}" reached strike limit and was removed from the queue.`, 'warn');
     });
 
     return () => {
       socket.off('state:sync');
       socket.off('listeners:count');
+      socket.off('room:config');
       socket.off('track:changed');
       socket.off('queue:updated');
       socket.off('notification:new_request');
@@ -160,6 +173,11 @@ export default function App() {
   // Play / Pause toggle with synchronized YouTube stream audio
   const handleTogglePlay = async () => {
     if (!isPlaying) {
+      if (!currentSong || !currentSong.youtubeId) {
+        showNotice('Station Standby', 'The queue is empty. Choose a suggested song below or paste a YouTube link to start streaming!', 'warn');
+        return;
+      }
+
       setIsPlaying(true);
       setIsSynced(true);
 
@@ -208,6 +226,11 @@ export default function App() {
 
   // Authoritative second-by-second ticker
   useEffect(() => {
+    if (!currentSong) {
+      setCurrentTime(0);
+      return;
+    }
+
     const interval = setInterval(() => {
       setCurrentTime((prev) => {
         const nextTime = prev + 1;
@@ -233,9 +256,13 @@ export default function App() {
   const handleSubmitRequest = async (url: string) => {
     const res = await radioSocket.submitSongRequest(url, false);
     if (res.success) {
-      setCooldownSeconds(3600); // 1-hour cooldown
+      if (isSmallRoom || res.remainingCooldown === 0 || res.isSmallRoom) {
+        setCooldownSeconds(0);
+      } else {
+        setCooldownSeconds(3600); // 1-hour cooldown when >3 listeners
+      }
     } else if (res.remainingSeconds) {
-      setCooldownSeconds(res.remainingSeconds);
+      setCooldownSeconds(isSmallRoom ? 0 : res.remainingSeconds);
     }
     return res;
   };
@@ -246,11 +273,21 @@ export default function App() {
     if (!res.success && res.error) {
       showNotice('Strike Notice', res.error, 'warn');
     } else if (res.pulled) {
-      showNotice('Community Moderation', 'Song reached 3 strikes and was automatically removed from the global queue!', 'warn');
+      showNotice(
+        'Community Moderation',
+        `Song was pulled from the global queue (reached ${res.strikes || 1} strike${(res.strikes || 1) === 1 ? '' : 's'})!`,
+        'warn'
+      );
+    } else if (res.strikes) {
+      showNotice(
+        'Strike Recorded',
+        `Strike recorded (${res.strikes}/${res.strikeThreshold || strikeThreshold}).`,
+        'info'
+      );
     }
   };
 
-  const currentRemainingTime = Math.max(0, Math.min(420, currentSong.duration || 420) - currentTime);
+  const currentRemainingTime = currentSong ? Math.max(0, Math.min(420, currentSong.duration || 420) - currentTime) : 0;
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col font-sans selection:bg-amber-500 selection:text-neutral-950">
@@ -274,6 +311,14 @@ export default function App() {
               <Users className="w-3.5 h-3.5 text-neutral-400" />
               <span>{listenersCount} {listenersCount === 1 ? 'person' : 'people'} listening in sync</span>
             </span>
+            {isSmallRoom && (
+              <>
+                <span className="text-neutral-600 hidden md:inline">|</span>
+                <span className="text-amber-300 font-mono text-[11px] hidden md:flex items-center gap-1 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded">
+                  <span>⚡ 1–3 Users: Cooldown & strike restrictions waived</span>
+                </span>
+              </>
+            )}
           </div>
 
           <div className="flex items-center gap-3 font-mono text-[11px] text-neutral-400">
@@ -373,6 +418,8 @@ export default function App() {
         <RequestSection
           onSubmitRequest={handleSubmitRequest}
           cooldownSeconds={cooldownSeconds}
+          listenersCount={listenersCount}
+          isSmallRoom={isSmallRoom}
         />
 
         {/* 3. Queue Section ('Up Next') */}
@@ -380,6 +427,9 @@ export default function App() {
           queue={queue}
           currentRemainingTime={currentRemainingTime}
           onStrikeSong={handleStrikeSong}
+          listenersCount={listenersCount}
+          strikeThreshold={strikeThreshold}
+          isSmallRoom={isSmallRoom}
         />
       </main>
 

@@ -32,6 +32,8 @@ export interface SyncPayload {
   serverTime: number;
   queue: any[];
   listenerCount: number;
+  strikeThreshold?: number;
+  isSmallRoom?: boolean;
 }
 
 export interface TrackChangedPayload {
@@ -96,7 +98,7 @@ class RadioSocketManager {
   public submitSongRequest(
     url: string,
     bypassCooldown: boolean = false
-  ): Promise<{ success: boolean; error?: string; remainingSeconds?: number; song?: any }> {
+  ): Promise<{ success: boolean; error?: string; remainingSeconds?: number; remainingCooldown?: number; isSmallRoom?: boolean; song?: any }> {
     return new Promise((resolve) => {
       if (!this.socket) {
         resolve({ success: false, error: 'Not connected to radio server' });
@@ -121,7 +123,7 @@ class RadioSocketManager {
   public strikeSong(
     songId: string,
     peerId?: string
-  ): Promise<{ success: boolean; error?: string; strikes?: number; pulled?: boolean }> {
+  ): Promise<{ success: boolean; error?: string; strikes?: number; strikeThreshold?: number; pulled?: boolean }> {
     return new Promise((resolve) => {
       if (!this.socket) {
         resolve({ success: false, error: 'Not connected to radio server' });
