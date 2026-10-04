@@ -10,45 +10,21 @@ const __dirname = path.dirname(__filename);
 // YouTube title filtering forbidden terms
 const FORBIDDEN_WORDS = ['vlog', 'trailer', 'gameplay', 'episode'];
 
-// Default curated campus radio tracks
-const DEFAULT_TRACKS = [
-  {
-    title: 'Coke Studio | Pasoori | Ali Sethi x Shae Gill',
-    artist: 'Coke Studio Pakistan',
-    youtubeId: '5Eqb_-j3FDA',
-    youtubeUrl: 'https://www.youtube.com/watch?v=5Eqb_-j3FDA',
-    thumbnail: 'https://img.youtube.com/vi/5Eqb_-j3FDA/hqdefault.jpg',
-    duration: 228,
-    requestedBy: '@svnit_radio_desk',
+// Known track info for instant resolution
+const KNOWN_TRACK_INFO: Record<string, { title: string; artist: string }> = {
+  'IAIGnS9BPKs': {
+    title: 'Ek Ladki Ko Dekha Toh Aisa Laga - Title Song',
+    artist: 'Saregama Music',
   },
-  {
-    title: 'Ed Sheeran - Shape of You (Official Music Video)',
-    artist: 'Ed Sheeran',
-    youtubeId: 'JGwWNGJdvx8',
-    youtubeUrl: 'https://www.youtube.com/watch?v=JGwWNGJdvx8',
-    thumbnail: 'https://img.youtube.com/vi/JGwWNGJdvx8/hqdefault.jpg',
-    duration: 234,
-    requestedBy: '@priya_ece',
+  '4HRC6c5-2lQ': {
+    title: 'Yeh Raaten Yeh Mausam - SANAM ft. Simran Sehgal',
+    artist: 'SANAM',
   },
-  {
-    title: 'Luis Fonsi - Despacito ft. Daddy Yankee',
-    artist: 'Luis Fonsi',
-    youtubeId: 'kJQP7kiw5Fk',
-    youtubeUrl: 'https://www.youtube.com/watch?v=kJQP7kiw5Fk',
-    thumbnail: 'https://img.youtube.com/vi/kJQP7kiw5Fk/hqdefault.jpg',
-    duration: 282,
-    requestedBy: '@rohit_mech',
+  't-a6VlOUEtc': {
+    title: 'Sakkarakatti - Marudaani Cover by Sanah Moidutty',
+    artist: 'Sony Music South',
   },
-  {
-    title: 'Queen - Bohemian Rhapsody (Official Video)',
-    artist: 'Queen',
-    youtubeId: 'fJ9rUzIMcZQ',
-    youtubeUrl: 'https://www.youtube.com/watch?v=fJ9rUzIMcZQ',
-    thumbnail: 'https://img.youtube.com/vi/fJ9rUzIMcZQ/hqdefault.jpg',
-    duration: 359,
-    requestedBy: '@neha_cs',
-  },
-];
+};
 
 interface ServerSong {
   id: string;
@@ -65,25 +41,10 @@ interface ServerSong {
   status: 'playing' | 'queued' | 'struck_out';
 }
 
-// Global server state
-let currentSong: ServerSong = {
-  ...DEFAULT_TRACKS[0],
-  id: `track-${Date.now()}`,
-  requestedAt: Date.now() - 60000,
-  strikes: 0,
-  struckByUsers: [],
-  status: 'playing',
-};
-
-let currentSongStartedAt: number = Date.now() - 60000; // current playback start time
-let globalQueue: ServerSong[] = DEFAULT_TRACKS.slice(1).map((track, i) => ({
-  ...track,
-  id: `queued-${Date.now()}-${i}`,
-  requestedAt: Date.now() - (300000 * (i + 1)),
-  strikes: 0,
-  struckByUsers: [],
-  status: 'queued',
-}));
+// Global server state: starts empty with no default tracks or queue items
+let currentSong: ServerSong | null = null;
+let currentSongStartedAt: number = 0; // 0 when station is idle
+let globalQueue: ServerSong[] = [];
 
 // Rate limiting: 1 request per hour (3600 seconds) per user UUID / IP
 const userRateLimits = new Map<string, number>();
@@ -109,6 +70,8 @@ function extractYouTubeId(url: string): string | null {
 }
 
 async function fetchOEmbed(url: string) {
+  const videoId = extractYouTubeId(url);
+  const known = videoId ? KNOWN_TRACK_INFO[videoId] : undefined;
   try {
     const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
     const res = await fetch(oembedUrl);
@@ -118,6 +81,13 @@ async function fetchOEmbed(url: string) {
   } catch (e) {
     console.warn('oEmbed fetch error:', e);
   }
+  if (known) {
+    return {
+      title: known.title,
+      author_name: known.artist,
+      thumbnail_url: videoId ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg` : '',
+    };
+  }
   return null;
 }
 
@@ -126,21 +96,14 @@ function rotateToNextSong(io: Server, reason: 'finished' | 'skipped_7min' | 'man
     const nextSong = globalQueue.shift()!;
     nextSong.status = 'playing';
     currentSong = nextSong;
+    currentSongStartedAt = Date.now();
+    console.log(`[Radio Rotation] Switched to "${currentSong.title}" (${reason}). Broadcasted to all listeners.`);
   } else {
-    // Loop through default curated station tracks
-    const randomDefault = DEFAULT_TRACKS[Math.floor(Math.random() * DEFAULT_TRACKS.length)];
-    currentSong = {
-      ...randomDefault,
-      id: `station-${Date.now()}`,
-      requestedAt: Date.now(),
-      strikes: 0,
-      struckByUsers: [],
-      status: 'playing',
-    };
+    // No default songs: station stays on idle standby waiting for user requests
+    currentSong = null;
+    currentSongStartedAt = 0;
+    console.log(`[Radio Rotation] Queue is now empty. Station on standby (${reason}).`);
   }
-
-  currentSongStartedAt = Date.now();
-  console.log(`[Radio Rotation] Switched to "${currentSong.title}" (${reason}). Broadcasted to all listeners.`);
 
   io.emit('track:changed', {
     currentSong,
@@ -165,13 +128,24 @@ async function startServer() {
   // Track connected sockets for active listener count
   const activeSockets = new Set<string>();
 
+  const getStrikeThreshold = () => {
+    const count = Math.max(1, activeSockets.size);
+    if (count <= 1) return 1;
+    if (count <= 3) return 2; // majority for 2 or 3 active listeners
+    return 3; // standard 3-strike rule when >3 listeners
+  };
+
   const broadcastListenerCount = () => {
     const count = Math.max(1, activeSockets.size);
+    const strikeThreshold = getStrikeThreshold();
+    const isSmallRoom = count <= 3;
     io.emit('listeners:count', count);
+    io.emit('room:config', { count, strikeThreshold, isSmallRoom });
   };
 
   // 1-second interval for "7-minute rule" & duration auto-rotation
   setInterval(() => {
+    if (!currentSong) return; // Station is on standby
     const elapsedSeconds = Math.floor((Date.now() - currentSongStartedAt) / 1000);
     // The "7-Minute Rule": if a song plays for 7 minutes (420s), automatically skip to next song
     const maxAllowedSeconds = Math.min(420, currentSong.duration || 420);
@@ -184,14 +158,17 @@ async function startServer() {
 
   // REST endpoints for status & health
   app.get('/api/radio/status', (req, res) => {
-    const elapsedSeconds = Math.floor((Date.now() - currentSongStartedAt) / 1000);
+    const elapsedSeconds = currentSongStartedAt > 0 ? Math.floor((Date.now() - currentSongStartedAt) / 1000) : 0;
+    const count = Math.max(1, activeSockets.size);
     res.json({
       currentSong,
       startedAt: currentSongStartedAt,
       elapsedSeconds,
       serverTime: Date.now(),
       queue: globalQueue,
-      listenerCount: Math.max(1, activeSockets.size),
+      listenerCount: count,
+      strikeThreshold: getStrikeThreshold(),
+      isSmallRoom: count <= 3,
     });
   });
 
@@ -205,14 +182,17 @@ async function startServer() {
     broadcastListenerCount();
 
     // Time Syncing: Send full current state + exact seek seconds
-    const elapsedSeconds = Math.floor((Date.now() - currentSongStartedAt) / 1000);
+    const elapsedSeconds = currentSongStartedAt > 0 ? Math.floor((Date.now() - currentSongStartedAt) / 1000) : 0;
+    const count = Math.max(1, activeSockets.size);
     socket.emit('state:sync', {
       currentSong,
       startedAt: currentSongStartedAt,
       seekSeconds: elapsedSeconds,
       serverTime: Date.now(),
       queue: globalQueue,
-      listenerCount: Math.max(1, activeSockets.size),
+      listenerCount: count,
+      strikeThreshold: getStrikeThreshold(),
+      isSmallRoom: count <= 3,
     });
 
     // Handle user song request
@@ -220,9 +200,11 @@ async function startServer() {
       try {
         const { url, userId, username, bypassCooldown } = payload;
         const rateLimitKey = userId || clientIp;
+        const activeCount = Math.max(1, activeSockets.size);
+        const isSmallRoom = activeCount <= 3; // 1, 2, or 3 active listeners
 
-        // 1. Rate Limiting: 1 song per hour
-        if (!bypassCooldown && userRateLimits.has(rateLimitKey)) {
+        // 1. Rate Limiting: 1 song per hour (waived if 1, 2, or 3 active listeners)
+        if (!isSmallRoom && !bypassCooldown && userRateLimits.has(rateLimitKey)) {
           const lastRequestTime = userRateLimits.get(rateLimitKey)!;
           const elapsed = (Date.now() - lastRequestTime) / 1000;
           if (elapsed < RATE_LIMIT_SECONDS) {
@@ -230,7 +212,7 @@ async function startServer() {
             if (callback) {
               callback({
                 success: false,
-                error: `Rate limit: You can only request 1 song per hour. Please wait ${Math.floor(remaining / 60)}m ${remaining % 60}s.`,
+                error: `Rate limit: You can only request 1 song per hour when >3 listeners are online. Please wait ${Math.floor(remaining / 60)}m ${remaining % 60}s.`,
                 remainingSeconds: remaining,
               });
             }
@@ -266,7 +248,7 @@ async function startServer() {
           return;
         }
 
-        // 5. Append to Global Queue
+        // 5. Append to Global Queue (or play immediately if station is idle)
         const newSong: ServerSong = {
           id: `req-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           title,
@@ -282,18 +264,41 @@ async function startServer() {
           status: 'queued',
         };
 
-        globalQueue.push(newSong);
-        userRateLimits.set(rateLimitKey, Date.now());
+        if (!currentSong) {
+          newSong.status = 'playing';
+          currentSong = newSong;
+          currentSongStartedAt = Date.now();
+          console.log(`[Radio Request] Station was idle. Started broadcasting "${newSong.title}".`);
 
-        // Broadcast updated queue to all connected clients
-        io.emit('queue:updated', globalQueue);
+          io.emit('track:changed', {
+            currentSong,
+            startedAt: currentSongStartedAt,
+            seekSeconds: 0,
+            serverTime: Date.now(),
+            reason: 'new_request',
+          });
+        } else {
+          globalQueue.push(newSong);
+          io.emit('queue:updated', globalQueue);
+        }
+
+        // Only enforce the rate limit timestamp when not in a small room (<=3 listeners)
+        if (!isSmallRoom) {
+          userRateLimits.set(rateLimitKey, Date.now());
+        }
+
         io.emit('notification:new_request', {
           title: newSong.title,
           requestedBy: newSong.requestedBy,
         });
 
         if (callback) {
-          callback({ success: true, song: newSong, remainingCooldown: RATE_LIMIT_SECONDS });
+          callback({
+            success: true,
+            song: newSong,
+            remainingCooldown: isSmallRoom ? 0 : RATE_LIMIT_SECONDS,
+            isSmallRoom,
+          });
         }
       } catch (err: any) {
         console.error('[Error] song:request failed:', err);
@@ -303,7 +308,7 @@ async function startServer() {
       }
     });
 
-    // Handle song strike (3 strikes removes it)
+    // Handle song strike (adaptive strikes: 1 for 1 user, 2 for 2-3 users, 3 for >3 users; user strike restriction waived for <= 3 users)
     socket.on('song:strike', (payload: { songId: string; userId: string; peerId?: string }, callback) => {
       const { songId, userId, peerId } = payload;
       const strikeUserId = peerId || userId || clientIp;
@@ -315,42 +320,49 @@ async function startServer() {
       }
 
       const song = globalQueue[targetIndex];
+      const activeCount = Math.max(1, activeSockets.size);
+      const isSmallRoom = activeCount <= 3;
+      const strikeThreshold = getStrikeThreshold();
 
-      // Check if this user already struck this song
-      if (song.struckByUsers.includes(strikeUserId)) {
+      // In large rooms (>3 listeners), each user can only strike once.
+      // In small rooms (1, 2, or 3 listeners), the restriction is waived so moderation isn't blocked.
+      if (!isSmallRoom && song.struckByUsers.includes(strikeUserId)) {
         if (callback) callback({ success: false, error: 'You have already struck this song.' });
         return;
       }
 
       song.struckByUsers.push(strikeUserId);
-      song.strikes = song.struckByUsers.length;
+      song.strikes += 1;
 
-      // 3 strikes: pull from queue!
-      if (song.strikes >= 3) {
+      // When threshold is reached, pull from queue immediately
+      if (song.strikes >= strikeThreshold) {
         globalQueue.splice(targetIndex, 1);
         io.emit('queue:updated', globalQueue);
         io.emit('notification:song_pulled', {
           songTitle: song.title,
-          reason: 'Received 3 listener strikes and was pulled from the air.',
+          reason: `Reached ${song.strikes}/${strikeThreshold} strike(s) (${activeCount} active listener${activeCount === 1 ? '' : 's'}) and was pulled from the air.`,
         });
-        if (callback) callback({ success: true, pulled: true });
+        if (callback) callback({ success: true, pulled: true, strikes: song.strikes, strikeThreshold });
         return;
       }
 
       io.emit('queue:updated', globalQueue);
-      if (callback) callback({ success: true, strikes: song.strikes });
+      if (callback) callback({ success: true, strikes: song.strikes, strikeThreshold });
     });
 
     // Client requests re-sync (e.g. after user interacts with play button)
     socket.on('sync:request', () => {
-      const elapsed = Math.floor((Date.now() - currentSongStartedAt) / 1000);
+      const elapsed = currentSongStartedAt > 0 ? Math.floor((Date.now() - currentSongStartedAt) / 1000) : 0;
+      const count = Math.max(1, activeSockets.size);
       socket.emit('state:sync', {
         currentSong,
         startedAt: currentSongStartedAt,
         seekSeconds: elapsed,
         serverTime: Date.now(),
         queue: globalQueue,
-        listenerCount: Math.max(1, activeSockets.size),
+        listenerCount: count,
+        strikeThreshold: getStrikeThreshold(),
+        isSmallRoom: count <= 3,
       });
     });
 
